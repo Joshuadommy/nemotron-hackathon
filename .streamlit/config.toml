@@ -1,0 +1,17 @@
+# Pin Streamlit theme so it doesn't auto-switch to dark mode (which would
+# override our custom CSS palette). All colors map to the Bartazari portfolio
+# tokens; the rest of the visual design is done in app.py CSS.
+
+[theme]
+base = "light"
+primaryColor = "#1A2A59"           # indigo
+backgroundColor = "#F7F6F3"        # off-white canvas
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#1C1C1C"
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false
+
+[server]
+runOnSave = true

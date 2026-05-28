@@ -1,7 +1,8 @@
 """PDF export for Compliance Copilot verdicts.
 
-Uses reportlab to build a clean memo-style PDF in the portfolio palette:
-indigo / fawn / dusk on off-white. Inspired by probity's PDF layout.
+Builds a memo-style PDF in the project palette (indigo / fawn / dusk on
+off-white) using reportlab with the Cabin TTF family registered as the
+body font.
 """
 from __future__ import annotations
 

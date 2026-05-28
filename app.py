@@ -1407,15 +1407,32 @@ for col, ex in zip(ex_cols, EXAMPLES):
         )
 
 if ss.error:
+    err_low = (ss.error or "").lower()
+    is_404 = "404" in err_low or "model_not_found" in err_low or "not found" in err_low
+    is_auth = "401" in err_low or "unauthorized" in err_low or "invalid api key" in err_low
+    if is_404:
+        hint = (
+            "The configured model name was rejected by the inference endpoint. "
+            "Check <code>COMPLIANCE_MODEL</code> in your environment (or the default in "
+            "<code>agent.py</code>) against the models the provider currently exposes."
+        )
+    elif is_auth:
+        hint = (
+            "Authentication failed. Verify <code>CRUSOE_API_KEY</code> in your <code>.env</code> "
+            "file is set to a current key."
+        )
+    else:
+        hint = (
+            "The endpoint may be transiently overloaded. The agent already retried twice on this "
+            "turn — click <em>Retry analysis</em> below to send the request again."
+        )
     st.html(
         '<div style="margin-top:16px;padding:14px 18px;background:var(--danger-soft);'
         'border:1px solid rgba(180,62,62,0.25);border-radius:12px;color:var(--danger);'
         f'font-size:13.5px;line-height:1.5;">'
         f'<strong style="font-weight:600;">Agent error.</strong> {_esc(ss.error)}'
-        '<div style="margin-top:8px;font-size:12.5px;color:var(--text-2);">'
-        'The Crusoe endpoint occasionally returns 500s under load. The agent already auto-retried '
-        'twice on this turn — click <em>Retry analysis</em> below to send the request again.'
-        '</div></div>'
+        f'<div style="margin-top:8px;font-size:12.5px;color:var(--text-2);">{hint}</div>'
+        '</div>'
     )
 
     def _retry_run() -> None:

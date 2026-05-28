@@ -35,11 +35,14 @@ DATA_DIR = Path(__file__).parent / "data"
 INDEX_FILE = DATA_DIR / "index.md"
 
 # Default to Nano for cost; users can override with COMPLIANCE_MODEL env var.
-DEFAULT_MODEL = os.getenv("COMPLIANCE_MODEL", "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B")
+DEFAULT_MODEL = os.getenv("COMPLIANCE_MODEL", "hack-crusoe/Nemotron-3-Nano-30B-A3B-FP8")
 NANO_INPUT_PER_M = 0.05
 NANO_OUTPUT_PER_M = 0.20
 
-MAX_LOOP_STEPS = 8
+# Generous enough for the model to fetch every regulation it wants (worst case
+# 1 list + 7 get_regulation calls + 1 synthesis turn + slack) without the
+# fallback path getting starved.
+MAX_LOOP_STEPS = 14
 
 
 # ──────────────────────────── corpus loader ─────────────────────────────
@@ -455,6 +458,83 @@ FORCE_VERDICT_PROMPT = (
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
 
 
+_SMART_QUOTES = str.maketrans({
+    "“": '"', "”": '"', "„": '"', "‟": '"',
+    "‘": "'", "’": "'", "‚": "'", "‛": "'",
+})
+
+
+def _repair_truncated_json(text: str) -> str | None:
+    """Attempt to close an unterminated JSON object that ends mid-value.
+
+    Walks the text tracking brace/bracket depth and string state. If we end
+    inside a string, close it. If we're mid-value (just saw ':' or ','),
+    insert null. Then append the missing ] and } in the right order.
+    Returns the repaired string, or None if no { was found at all.
+    """
+    start = text.find("{")
+    if start < 0:
+        return None
+    s = text[start:]
+
+    stack: list[str] = []   # 'o' = object, 'a' = array
+    in_str = False
+    esc = False
+    after_colon = False     # last non-space was ':' (expecting value)
+    last_significant = ""   # last non-space char outside string
+
+    for ch in s:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+                last_significant = '"'
+            continue
+        if ch == '"':
+            in_str = True
+            after_colon = False
+            last_significant = '"'
+            continue
+        if ch.isspace():
+            continue
+        if ch == "{":
+            stack.append("o")
+            after_colon = False
+        elif ch == "[":
+            stack.append("a")
+            after_colon = False
+        elif ch == "}":
+            if stack and stack[-1] == "o":
+                stack.pop()
+            after_colon = False
+        elif ch == "]":
+            if stack and stack[-1] == "a":
+                stack.pop()
+            after_colon = False
+        elif ch == ":":
+            after_colon = True
+        elif ch == ",":
+            after_colon = False
+        last_significant = ch
+
+    if not stack and not in_str:
+        return s   # already balanced
+    repaired = s
+    if in_str:
+        repaired += '"'
+    # If we ended right after a ':' or ',' we need a value placeholder
+    if after_colon or last_significant == ",":
+        repaired += " null"
+    # Close everything in reverse order
+    while stack:
+        kind = stack.pop()
+        repaired += "}" if kind == "o" else "]"
+    return repaired
+
+
 def _balanced_objects(text: str):
     """Yield every balanced { ... } substring in text. Skips braces inside
     strings so {"x":"}"} parses correctly."""
@@ -491,21 +571,31 @@ def _balanced_objects(text: str):
 
 
 def _extract_json_verdict(text: str) -> dict[str, Any] | None:
-    """Pull a JSON verdict out of free-form model output. Tries fenced blocks
-    first, then any balanced top-level object anywhere in the text."""
+    """Pull a JSON verdict out of free-form model output.
+
+    Strategy, in order:
+      1. Try every ```json...``` fenced block.
+      2. Try every balanced {...} substring.
+      3. Try a brace-repaired version of the whole text (covers the common
+         failure where the model ran out of tokens mid-JSON).
+
+    Each candidate is normalized for smart-quote characters before parsing.
+    Candidates are scored by how many expected fields they contain; the
+    best-scoring valid object wins.
+    """
     if not text:
         return None
 
+    normalized = text.translate(_SMART_QUOTES)
+
     candidates: list[str] = []
-
-    # 1) Every ```json...``` fenced block (in order).
-    for m in _FENCE_RE.finditer(text):
+    for m in _FENCE_RE.finditer(normalized):
         candidates.append(m.group(1).strip())
+    candidates.extend(_balanced_objects(normalized))
+    repaired = _repair_truncated_json(normalized)
+    if repaired:
+        candidates.append(repaired)
 
-    # 2) Every balanced { ... } object found in the full text.
-    candidates.extend(_balanced_objects(text))
-
-    # Score each candidate: prefer ones with the most expected fields filled.
     expected = ("summary", "applicable_regulations", "requirements", "risk_flags")
     best: tuple[int, dict] | None = None
     for c in candidates:
@@ -547,11 +637,13 @@ def _build_synthesis_messages(
     blob = "".join(sections_blob_parts)
 
     user_msg = (
+        "/no_think\n\n"
         f"SCENARIO:\n{scenario.strip()}\n\n"
         f"REGULATIONS YOU REVIEWED (use their actual section headings as citations):\n"
         f"{blob}\n\n"
-        "Emit ONLY a fenced ```json ... ``` block containing one object with these fields. "
-        "Do NOT write any commentary before or after the block.\n"
+        "Skip your reasoning trace. Emit ONLY a fenced ```json ... ``` block "
+        "containing one object with these fields. Do NOT write any commentary "
+        "before or after the block.\n"
         "{\n"
         '  "summary": "2-4 sentences",\n'
         '  "applicable_regulations": [{"reg_id":"REG_ID","title":"Full title","jurisdiction":"...","why_applicable":"why THIS scenario triggers it"}],\n'
@@ -776,7 +868,10 @@ def run_agent(scenario: str, model: str | None = None) -> Generator[tuple[str, A
         # needs to emit JSON in content. Bigger token budget for the synthesis.
         if json_fallback_used:
             use_tools = False
-            max_tokens = 6000
+            # Synthesis turn: the prompt directs Nemotron to skip its reasoning
+            # trace (/no_think), but if it ignores that we still want enough
+            # budget for both reasoning AND a multi-section verdict object.
+            max_tokens = 12000
         else:
             use_tools = True
             max_tokens = 2048
@@ -802,8 +897,7 @@ def run_agent(scenario: str, model: str | None = None) -> Generator[tuple[str, A
         msg_reasoning = (getattr(msg, "reasoning", None) or "").strip()
 
         # Surface the model's thinking trace as a separate event so the UI
-        # can show "Reasoning" as a distinct step in the timeline. This is
-        # the agentic-behavior signal judges look for.
+        # can show "Reasoning" as a distinct step in the timeline.
         if msg_reasoning and not json_fallback_used:
             # Trim very long reasoning to keep the trace skimmable
             reasoning_excerpt = msg_reasoning
@@ -823,9 +917,21 @@ def run_agent(scenario: str, model: str | None = None) -> Generator[tuple[str, A
 
             # Last-resort: synthesize a degraded verdict from whatever
             # regulations the agent fetched. Better than a blank screen.
-            if msg_content:
-                yield ("model_text", msg_content)
-            yield ("status", "Model did not return parseable JSON — showing a degraded summary built from the fetched regulations.")
+            # Surface the raw output so the user can see WHY it failed to
+            # parse (truncation, prose, unexpected schema, etc.).
+            raw_excerpt = msg_content or msg_reasoning or ""
+            if len(raw_excerpt) > 1200:
+                raw_excerpt = raw_excerpt[:1200].rstrip() + " […truncated for display]"
+            if raw_excerpt:
+                yield ("model_text", raw_excerpt)
+            reason = "no parseable JSON in the response"
+            if not msg_content and msg_reasoning:
+                reason = "response stayed in the reasoning trace and no JSON content was emitted"
+            elif msg_content and "{" not in msg_content:
+                reason = "model wrote prose without any JSON object"
+            elif msg_content and msg_content.count("{") > msg_content.count("}"):
+                reason = "JSON was emitted but truncated mid-output (likely hit the token budget)"
+            yield ("status", f"Falling back to a degraded summary — {reason}.")
             degraded = _degraded_verdict(messages, scenario)
             yield ("verdict", degraded)
             verdict_emitted = True
@@ -931,10 +1037,35 @@ def run_agent(scenario: str, model: str | None = None) -> Generator[tuple[str, A
         if verdict_emitted:
             break
 
-    # If we exited the loop without a verdict and without using the fallback
-    # (e.g., MAX_LOOP_STEPS hit), still synthesize a degraded view.
+    # If we exited the loop without a verdict, try one last guaranteed
+    # synthesis call before giving up to degraded mode. This covers the case
+    # where the model fetched so many regulations that MAX_LOOP_STEPS ran out
+    # before the fallback turn could execute.
+    if not verdict_emitted and fetched_regs_for_synthesis:
+        yield ("status", "Last-chance synthesis call…")
+        try:
+            synth_messages = _build_synthesis_messages(scenario, fetched_regs_for_synthesis)
+            resp = _chat(client, model, synth_messages, use_tools=False, max_tokens=12000)
+            usage = getattr(resp, "usage", None)
+            if usage is not None:
+                total_prompt_tokens += getattr(usage, "prompt_tokens", 0) or 0
+                total_completion_tokens += getattr(usage, "completion_tokens", 0) or 0
+            choice = resp.choices[0]
+            msg = choice.message
+            msg_content = (getattr(msg, "content", None) or "").strip()
+            msg_reasoning = (getattr(msg, "reasoning", None) or "").strip()
+            parsed = _extract_json_verdict("\n".join(filter(None, [msg_content, msg_reasoning])))
+            if parsed is not None and isinstance(parsed, dict) and parsed.get("summary"):
+                yield ("verdict", parsed)
+                verdict_emitted = True
+            elif msg_content:
+                excerpt = msg_content[:1200] + (" […truncated for display]" if len(msg_content) > 1200 else "")
+                yield ("model_text", excerpt)
+        except Exception as e:
+            yield ("status", f"Last-chance synthesis failed: {e}")
+
     if not verdict_emitted:
-        yield ("status", "Loop ended without a structured verdict — showing a degraded summary built from the fetched regulations.")
+        yield ("status", "Falling back to a degraded summary built from the fetched regulations.")
         yield ("verdict", _degraded_verdict(messages, scenario))
         verdict_emitted = True
 

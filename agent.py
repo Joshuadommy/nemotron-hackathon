@@ -35,7 +35,7 @@ DATA_DIR = Path(__file__).parent / "data"
 INDEX_FILE = DATA_DIR / "index.md"
 
 # Default to Nano for cost; users can override with COMPLIANCE_MODEL env var.
-DEFAULT_MODEL = os.getenv("COMPLIANCE_MODEL", "hack-crusoe/Nemotron-3-Nano-30B-A3B-FP8")
+DEFAULT_MODEL = os.getenv("COMPLIANCE_MODEL", "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B")
 NANO_INPUT_PER_M = 0.05
 NANO_OUTPUT_PER_M = 0.20
 

@@ -14,7 +14,7 @@ NANO_INPUT = 0.05
 NANO_OUTPUT = 0.20
 
 resp = client.chat.completions.create(
-    model="hack-crusoe/Nemotron-3-Nano-30B-A3B-FP8",
+    model="nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
     messages=[
         {"role": "user", "content": "What's the capital of Tanzania? One word."},
     ],

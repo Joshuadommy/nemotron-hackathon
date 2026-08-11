@@ -29,7 +29,7 @@ st.set_page_config(
     page_title="Compliance Copilot",
     page_icon="⚖",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 
@@ -778,68 +778,6 @@ div:has(> div > #cc-example-anchor) + div [data-testid="stBaseButton-secondary"]
 }
 .cc-case-meta { color: var(--muted); font-size: 11px; margin: -6px 0 10px; }
 
-/* ── Agent workspace refresh ───────────────────────────────────────── */
-[data-testid="stSidebar"] {
-  min-width: 286px !important;
-  max-width: 286px !important;
-  background: #F2F1EE !important;
-  border-right: 1px solid var(--line) !important;
-}
-[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
-  background: #F2F1EE !important;
-  padding: 18px 12px !important;
-}
-[data-testid="stSidebar"] .block-container { padding: 0 !important; }
-.cc-side-brand { padding: 5px 6px 18px; }
-.cc-side-brand-name { font-size: 15px; font-weight: 700; letter-spacing: -.25px; color: var(--indigo); }
-.cc-side-brand-sub { margin-top: 3px; color: var(--muted); font-size: 11px; }
-[data-testid="stSidebar"] [data-testid="stButton"] button {
-  text-align: left !important;
-  justify-content: flex-start !important;
-  background: transparent !important;
-  border-color: transparent !important;
-  color: var(--text) !important;
-  padding: 9px 10px !important;
-}
-[data-testid="stSidebar"] [data-testid="stButton"] button:hover {
-  background: var(--white) !important;
-  border-color: var(--line) !important;
-}
-[data-testid="stSidebar"] [data-testid="stBaseButton-primary"] {
-  background: var(--indigo) !important;
-  border-color: var(--indigo) !important;
-  color: var(--white) !important;
-  justify-content: center !important;
-}
-.cc-agent-topbar {
-  display: flex; align-items: center; justify-content: space-between;
-  margin: 0 auto 40px; max-width: 820px;
-  color: var(--muted); font-size: 12px;
-}
-.cc-agent-title { color: var(--text); font-size: 14px; font-weight: 650; letter-spacing: -.1px; }
-.cc-agent-title span { color: var(--muted); font-weight: 400; }
-.cc-chat-intro { max-width: 720px; margin: 10vh auto 26px; text-align: center; }
-.cc-chat-intro h1 { margin: 0 0 10px; color: var(--text); font-size: clamp(28px, 4vw, 42px); letter-spacing: -1.4px; line-height: 1.1; }
-.cc-chat-intro p { margin: 0; color: var(--text-2); font-size: 15px; line-height: 1.65; }
-.cc-composer { max-width: 820px; margin: 0 auto; }
-.cc-composer-label { display:none; }
-[data-testid="stTextArea"] { max-width: 820px; margin: 0 auto; }
-[data-testid="stTextArea"] [data-baseweb="textarea"],
-[data-testid="stTextArea"] [data-baseweb="base-input"] {
-  border: 1px solid #D8D6D0 !important;
-  border-radius: 18px !important;
-  box-shadow: 0 4px 18px rgba(28,28,28,.05) !important;
-}
-[data-testid="stTextArea"] textarea { min-height: 116px !important; }
-.cc-composer-actions { max-width: 820px; margin: 10px auto 0; }
-.cc-output { max-width: 820px; margin: 38px auto 0; }
-.cc-header { display: none; }
-.cc-hero { display: none; }
-.cc-trace-card { border-radius: 16px; box-shadow: 0 4px 18px rgba(28,28,28,.035); }
-.cc-summary { border-radius: 16px; font-size: 16px; }
-.cc-stats { gap: 8px; }
-.cc-frame, .cc-rows, .cc-xref { border-radius: 16px; }
-
 /* ── Responsive ────────────────────────────────────────────────────── */
 @media (max-width: 760px) {
   .cc-frame-grid { grid-template-columns: 1fr; }
@@ -847,8 +785,6 @@ div:has(> div > #cc-example-anchor) + div [data-testid="stBaseButton-secondary"]
   .cc-hero h1 { font-size: 26px; }
   .cc-row { flex-direction: column; align-items: flex-start; }
   .cc-workspace-bar { align-items: flex-start; flex-direction: column; }
-  [data-testid="stSidebar"] { min-width: 0 !important; }
-  .cc-chat-intro { margin-top: 40px; }
 }
 </style>
 """
@@ -906,7 +842,6 @@ ss.setdefault("conversational", None)  # agent's friendly reply when the input w
 ss.setdefault("history_user", None)
 ss.setdefault("active_case_id", None)
 ss.setdefault("history_notice", None)
-ss.setdefault("history_notice_kind", "info")
 
 HISTORY_STORE = HistoryStore.from_environment()
 
@@ -1453,28 +1388,13 @@ def _request_history_code() -> None:
         return
     if "@" not in email:
         ss.history_notice = "Enter a valid work email address."
-        ss.history_notice_kind = "error"
         return
     try:
         HISTORY_STORE.request_email_code(email)
-        ss.history_notice = "Code sent. Check your inbox, then enter the six-digit code in the Cases sidebar."
-        ss.history_notice_kind = "success"
+        ss.history_notice = "Check your inbox for the six-digit sign-in code."
         ss.history_code_requested = True
-    except Exception as exc:
-        detail = str(exc).lower()
-        if "rate limit" in detail or "too many" in detail:
-            message = "Supabase is rate-limiting sign-in emails. Wait one minute, then try again."
-        elif "smtp" in detail or "email" in detail or "recipient" in detail:
-            message = (
-                "Supabase could not deliver this email. Its built-in sender only supports project-team "
-                "addresses; configure custom SMTP before inviting outside users."
-            )
-        elif "api key" in detail or "unauthorized" in detail:
-            message = "Supabase rejected the project key. Recheck SUPABASE_URL and SUPABASE_ANON_KEY in Streamlit secrets."
-        else:
-            message = "Could not request a sign-in code. Confirm the Email provider is enabled and try again."
-        ss.history_notice = message
-        ss.history_notice_kind = "error"
+    except Exception:
+        ss.history_notice = "We could not send a sign-in code. Check the Supabase configuration."
 
 
 def _verify_history_code() -> None:
@@ -1486,18 +1406,15 @@ def _verify_history_code() -> None:
         user = HISTORY_STORE.verify_email_code(email, code)
         ss.history_user = user.__dict__
         ss.history_notice = f"Signed in as {user.email}. Your cases are private."
-        ss.history_notice_kind = "success"
         ss.history_code_requested = False
     except Exception:
         ss.history_notice = "That code did not work or has expired. Request a new code and try again."
-        ss.history_notice_kind = "error"
 
 
 def _sign_out_history() -> None:
     ss.history_user = None
     ss.active_case_id = None
     ss.history_notice = "Signed out."
-    ss.history_notice_kind = "info"
 
 
 def _load_case(record: dict) -> None:
@@ -1510,7 +1427,6 @@ def _load_case(record: dict) -> None:
     ss.error = None
     ss.running = False
     ss.history_notice = "Case restored. Edit the scenario and analyze again to update it."
-    ss.history_notice_kind = "success"
 
 
 def _save_current_case() -> None:
@@ -1532,90 +1448,94 @@ def _save_current_case() -> None:
         )
         ss.active_case_id = saved["id"]
         ss.history_notice = "Saved privately to your case history."
-        ss.history_notice_kind = "success"
     except Exception:
         ss.history_notice = "Analysis finished, but the case could not be saved. Please try again."
-        ss.history_notice_kind = "error"
 
 
 def render_history_workspace() -> None:
-    """Render the private case picker inside the persistent left rail."""
+    """Render account controls and a compact, private case picker."""
+    st.html(
+        '<div class="cc-workspace-bar">'
+        '<div><div class="cc-eyebrow" style="margin:0 0 3px;">Private workspace</div>'
+        '<div class="cc-workspace-note">Save cases, reopen them later, and keep each user\'s work separate.</div></div>'
+        '</div>'
+    )
     if HISTORY_STORE is None:
-        st.caption("Private history is not connected yet.")
-        st.caption("Add the Supabase URL and publishable key to enable it.")
+        with st.expander("Enable private case history"):
+            st.info(
+                "History is ready to connect. Add SUPABASE_URL and SUPABASE_ANON_KEY "
+                "as hosted secrets, then run supabase/schema.sql once in the Supabase SQL editor."
+            )
         return
 
     user = _history_user()
-    if user is None:
-        st.caption("Sign in to save and revisit your cases.")
-        st.text_input("Email", key="history_email", placeholder="you@company.com")
-        st.button("Email me a sign-in code", type="primary", use_container_width=True, on_click=_request_history_code, key="history_request_code")
-        if ss.get("history_code_requested"):
-            st.text_input("Six-digit code", key="history_code", max_chars=6)
-            st.button("Verify and open cases", use_container_width=True, on_click=_verify_history_code, key="history_verify_code")
-        return
+    with st.expander("Cases" + (f" · {user.email}" if user else " · Sign in"), expanded=False):
+        if ss.history_notice:
+            st.caption(ss.history_notice)
+        if user is None:
+            st.text_input("Email", key="history_email", placeholder="you@company.com")
+            st.button("Email me a sign-in code", on_click=_request_history_code, key="history_request_code")
+            if ss.get("history_code_requested"):
+                st.text_input("Six-digit code", key="history_code", max_chars=6)
+                st.button("Verify and open my cases", type="primary", on_click=_verify_history_code, key="history_verify_code")
+            st.caption("Cases are private to the signed-in email address.")
+            return
 
-    st.caption(user.email)
-    st.button("Sign out", on_click=_sign_out_history, key="history_signout")
-    st.divider()
-    st.caption("RECENT CASES")
-    try:
-        cases = HISTORY_STORE.list_cases(user)
-    except Exception:
-        st.warning("Could not load your history. Try signing in again.")
-        return
-    if not cases:
-        st.caption("Completed analyses will appear here automatically.")
-        return
-    for record in cases:
-        created = (record.get("updated_at") or "").replace("T", " ")[:10]
-        st.button(record.get("title") or "Untitled case", key=f"open_case_{record['id']}", use_container_width=True, on_click=_load_case, args=(record,))
-        st.caption(f"Updated {created}")
+        c1, c2 = st.columns([3, 1])
+        with c1:
+            st.caption("Your most recently updated cases")
+        with c2:
+            st.button("Sign out", on_click=_sign_out_history, key="history_signout")
+        try:
+            cases = HISTORY_STORE.list_cases(user)
+        except Exception:
+            st.warning("We could not load your history. Your existing cases remain private; try signing in again.")
+            return
+        if not cases:
+            st.caption("No saved cases yet. Completed analyses will appear here automatically.")
+            return
+        for record in cases:
+            created = (record.get("updated_at") or "").replace("T", " ")[:16]
+            left, right = st.columns([5, 1])
+            with left:
+                st.button(record.get("title") or "Untitled case", key=f"open_case_{record['id']}", use_container_width=True, on_click=_load_case, args=(record,))
+                st.caption(f"Updated {created}")
+            with right:
+                if st.button("Delete", key=f"delete_case_{record['id']}", use_container_width=True):
+                    try:
+                        HISTORY_STORE.delete_case(user, record["id"])
+                        if ss.active_case_id == record["id"]:
+                            ss.active_case_id = None
+                        st.rerun()
+                    except Exception:
+                        st.warning("Could not delete that case. Please try again.")
 
 
 # ──────────────────────────── render ────────────────────────────────────
 
-with st.sidebar:
-    st.html(
-        '<div class="cc-side-brand">'
-        '<div class="cc-side-brand-name">⚖ Compliance Copilot</div>'
-        '<div class="cc-side-brand-sub">AI regulatory intelligence</div></div>'
-    )
-    st.button("＋ New case", type="primary", use_container_width=True, on_click=_clear_all, key="sidebar_new_case")
-    st.divider()
-    render_history_workspace()
+st.html(render_header())
+render_history_workspace()
 
+# Hero copy
 st.html(
-    '<div class="cc-agent-topbar">'
-    '<div class="cc-agent-title">Compliance Copilot <span>· regulatory intelligence</span></div>'
-    f'{render_status_pill()}'
-    '</div>'
-)
-
-if ss.history_notice:
-    notice = ss.history_notice
-    if ss.history_notice_kind == "error":
-        st.error(notice)
-    elif ss.history_notice_kind == "success":
-        st.success(notice)
-    else:
-        st.info(notice)
-
-st.html(
-    '<div class="cc-chat-intro cc-fade">'
-    '<h1>What are you building?</h1>'
-    '<p>Describe an AI deployment in plain English. Compliance Copilot maps the relevant rules, '
-    'checks the source material, and turns it into an actionable plan.</p>'
+    '<div class="cc-hero cc-fade">'
+    '  <div class="cc-eyebrow">Scenario · plain English</div>'
+    '  <h1>What are you about to <span class="accent">deploy</span>?</h1>'
+    '  <p class="lead">Describe a business situation involving an AI system or automated decision. '
+    'The agent will figure out which AI-and-employment regulations apply, pull the relevant sections, '
+    'and return a compliance plan with citations you can verify inline.</p>'
     '</div>'
 )
 
 # Scenario textarea (the widget itself is the card thanks to CSS)
-st.html('<div class="cc-composer">')
-st.text_area(label="scenario", label_visibility="collapsed", placeholder="Ask about an AI deployment, hiring workflow, or automated decision…", key="scenario_input")
-st.html('</div>')
+st.text_area(
+    label="scenario",
+    label_visibility="collapsed",
+    placeholder="e.g., We're deploying an AI resume-screening tool for a tech company headquartered in NYC. Candidates apply from across the US and occasionally from the EU.",
+    key="scenario_input",
+)
 
 # Primary actions
-st.html('<div class="cc-composer-actions">')
 ac1, ac2, _ = st.columns([1.4, 1, 4.6])
 with ac1:
     st.button(
@@ -1626,7 +1546,6 @@ with ac1:
         on_click=_start_run,
         key="btn_run",
     )
-st.html('</div>')
 with ac2:
     st.button(
         "Clear",
@@ -1640,7 +1559,7 @@ with ac2:
 # Example chips — wrap in a container we can target from CSS.
 st.html('<div class="cc-eyebrow" style="margin-top:22px;">Try an example</div>')
 st.html('<div id="cc-example-anchor" style="display:none;"></div>')
-ex_cols = st.columns(2)
+ex_cols = st.columns(len(EXAMPLES))
 for col, ex in zip(ex_cols, EXAMPLES):
     with col:
         st.button(
@@ -1736,7 +1655,7 @@ def paint() -> None:
     html_out = "".join(chunks)
     output_slot.empty()
     with output_slot.container():
-        st.html(f'<div class="cc-output">{html_out}</div>')
+        st.html(html_out)
 
 
 # Run the agent if a click queued one up.

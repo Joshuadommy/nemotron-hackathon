@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 
 from agent import DEFAULT_MODEL, load_index, load_regulation, run_agent
 from export import build_pdf
+from history_store import AuthenticatedUser, HistoryStore
 
 load_dotenv()
 
@@ -761,12 +762,29 @@ div:has(> div > #cc-example-anchor) + div [data-testid="stBaseButton-secondary"]
   letter-spacing: -0.2px;
 }
 
+/* ── Private case history ─────────────────────────────────────────── */
+.cc-workspace-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin: -8px 0 24px;
+  padding: 10px 2px; border-bottom: 1px solid var(--line);
+}
+.cc-workspace-note { font-size: 12px; color: var(--muted); line-height: 1.4; }
+.cc-verified {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-left: 7px; padding: 3px 7px; border-radius: 999px;
+  background: var(--ok-soft); color: var(--ok);
+  font-size: 9px; font-weight: 700; letter-spacing: .7px;
+  text-transform: uppercase; vertical-align: middle;
+}
+.cc-case-meta { color: var(--muted); font-size: 11px; margin: -6px 0 10px; }
+
 /* ── Responsive ────────────────────────────────────────────────────── */
 @media (max-width: 760px) {
   .cc-frame-grid { grid-template-columns: 1fr; }
   .cc-stats { grid-template-columns: 1fr 1fr; }
   .cc-hero h1 { font-size: 26px; }
   .cc-row { flex-direction: column; align-items: flex-start; }
+  .cc-workspace-bar { align-items: flex-start; flex-direction: column; }
 }
 </style>
 """
@@ -821,6 +839,11 @@ ss.setdefault("finished_at", None)
 ss.setdefault("error", None)
 ss.setdefault("submit_pending", False)
 ss.setdefault("conversational", None)  # agent's friendly reply when the input wasn't a scenario
+ss.setdefault("history_user", None)
+ss.setdefault("active_case_id", None)
+ss.setdefault("history_notice", None)
+
+HISTORY_STORE = HistoryStore.from_environment()
 
 
 EXAMPLES = [
@@ -1074,7 +1097,7 @@ def render_citation_pill(citation: str) -> str:
         )
     return (
         f'<details class="cc-cite">'
-        f'  <summary>{_esc(citation)}</summary>'
+        f'  <summary>{_esc(citation)} <span class="cc-verified">✓ verified source</span></summary>'
         f'  <div class="cc-cite-body">'
         f'    <strong>{_esc(src["reg_title"])} — {_esc(src["heading"])}</strong>'
         f'    {_esc(src["text"])}'
@@ -1319,6 +1342,7 @@ def _set_example(text: str) -> None:
     ss.conversational = None
     ss.usage = None
     ss.error = None
+    ss.active_case_id = None
 
 
 def _clear_all() -> None:
@@ -1330,6 +1354,7 @@ def _clear_all() -> None:
     ss.error = None
     ss.started_at = None
     ss.finished_at = None
+    ss.active_case_id = None
 
 
 def _start_run() -> None:
@@ -1347,9 +1372,149 @@ def _start_run() -> None:
     ss.submit_pending = True   # picked up after rerun to actually run the agent
 
 
+def _history_user() -> AuthenticatedUser | None:
+    data = ss.history_user
+    if not isinstance(data, dict):
+        return None
+    try:
+        return AuthenticatedUser(**data)
+    except TypeError:
+        return None
+
+
+def _request_history_code() -> None:
+    email = (ss.get("history_email") or "").strip().lower()
+    if HISTORY_STORE is None:
+        return
+    if "@" not in email:
+        ss.history_notice = "Enter a valid work email address."
+        return
+    try:
+        HISTORY_STORE.request_email_code(email)
+        ss.history_notice = "Check your inbox for the six-digit sign-in code."
+        ss.history_code_requested = True
+    except Exception:
+        ss.history_notice = "We could not send a sign-in code. Check the Supabase configuration."
+
+
+def _verify_history_code() -> None:
+    email = (ss.get("history_email") or "").strip().lower()
+    code = (ss.get("history_code") or "").strip()
+    if HISTORY_STORE is None:
+        return
+    try:
+        user = HISTORY_STORE.verify_email_code(email, code)
+        ss.history_user = user.__dict__
+        ss.history_notice = f"Signed in as {user.email}. Your cases are private."
+        ss.history_code_requested = False
+    except Exception:
+        ss.history_notice = "That code did not work or has expired. Request a new code and try again."
+
+
+def _sign_out_history() -> None:
+    ss.history_user = None
+    ss.active_case_id = None
+    ss.history_notice = "Signed out."
+
+
+def _load_case(record: dict) -> None:
+    ss.active_case_id = record["id"]
+    ss.scenario_input = record.get("scenario", "")
+    ss.verdict = record.get("verdict")
+    ss.trace = record.get("trace") or []
+    ss.usage = record.get("usage")
+    ss.conversational = None
+    ss.error = None
+    ss.running = False
+    ss.history_notice = "Case restored. Edit the scenario and analyze again to update it."
+
+
+def _save_current_case() -> None:
+    user = _history_user()
+    if HISTORY_STORE is None or user is None or not (ss.scenario_input or "").strip():
+        return
+    title = " ".join(ss.scenario_input.strip().split())[:90]
+    if len(title) == 90:
+        title = title.rstrip() + "…"
+    try:
+        saved = HISTORY_STORE.save_case(
+            user,
+            case_id=ss.active_case_id,
+            title=title or "Untitled case",
+            scenario=ss.scenario_input,
+            verdict=ss.verdict,
+            trace=ss.trace,
+            usage=ss.usage,
+        )
+        ss.active_case_id = saved["id"]
+        ss.history_notice = "Saved privately to your case history."
+    except Exception:
+        ss.history_notice = "Analysis finished, but the case could not be saved. Please try again."
+
+
+def render_history_workspace() -> None:
+    """Render account controls and a compact, private case picker."""
+    st.html(
+        '<div class="cc-workspace-bar">'
+        '<div><div class="cc-eyebrow" style="margin:0 0 3px;">Private workspace</div>'
+        '<div class="cc-workspace-note">Save cases, reopen them later, and keep each user\'s work separate.</div></div>'
+        '</div>'
+    )
+    if HISTORY_STORE is None:
+        with st.expander("Enable private case history"):
+            st.info(
+                "History is ready to connect. Add SUPABASE_URL and SUPABASE_ANON_KEY "
+                "as hosted secrets, then run supabase/schema.sql once in the Supabase SQL editor."
+            )
+        return
+
+    user = _history_user()
+    with st.expander("Cases" + (f" · {user.email}" if user else " · Sign in"), expanded=False):
+        if ss.history_notice:
+            st.caption(ss.history_notice)
+        if user is None:
+            st.text_input("Email", key="history_email", placeholder="you@company.com")
+            st.button("Email me a sign-in code", on_click=_request_history_code, key="history_request_code")
+            if ss.get("history_code_requested"):
+                st.text_input("Six-digit code", key="history_code", max_chars=6)
+                st.button("Verify and open my cases", type="primary", on_click=_verify_history_code, key="history_verify_code")
+            st.caption("Cases are private to the signed-in email address.")
+            return
+
+        c1, c2 = st.columns([3, 1])
+        with c1:
+            st.caption("Your most recently updated cases")
+        with c2:
+            st.button("Sign out", on_click=_sign_out_history, key="history_signout")
+        try:
+            cases = HISTORY_STORE.list_cases(user)
+        except Exception:
+            st.warning("We could not load your history. Your existing cases remain private; try signing in again.")
+            return
+        if not cases:
+            st.caption("No saved cases yet. Completed analyses will appear here automatically.")
+            return
+        for record in cases:
+            created = (record.get("updated_at") or "").replace("T", " ")[:16]
+            left, right = st.columns([5, 1])
+            with left:
+                st.button(record.get("title") or "Untitled case", key=f"open_case_{record['id']}", use_container_width=True, on_click=_load_case, args=(record,))
+                st.caption(f"Updated {created}")
+            with right:
+                if st.button("Delete", key=f"delete_case_{record['id']}", use_container_width=True):
+                    try:
+                        HISTORY_STORE.delete_case(user, record["id"])
+                        if ss.active_case_id == record["id"]:
+                            ss.active_case_id = None
+                        st.rerun()
+                    except Exception:
+                        st.warning("Could not delete that case. Please try again.")
+
+
 # ──────────────────────────── render ────────────────────────────────────
 
 st.html(render_header())
+render_history_workspace()
 
 # Hero copy
 st.html(
@@ -1518,6 +1683,7 @@ if ss.running and ss.submit_pending:
     finally:
         ss.running = False
         ss.finished_at = time.time()
+        _save_current_case()
         st.rerun()
 else:
     paint()
@@ -1574,6 +1740,7 @@ if ss.verdict and not ss.running:
             ss.verdict = None
             ss.usage = None
             ss.error = None
+            ss.active_case_id = None
         st.button(
             "New scenario",
             type="secondary",

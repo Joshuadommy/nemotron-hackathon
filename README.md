@@ -133,6 +133,33 @@ streamlit run app.py
 | `CRUSOE_API_KEY` | *(required)* | Auth for the Crusoe inference endpoint. |
 | `COMPLIANCE_MODEL` | `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B` | Override to a larger Nemotron when you need longer context or stronger reasoning. |
 | `COMPLIANCE_CACHE` | `1` | Set to `0` to disable the disk cache (`.cache/`). |
+| `SUPABASE_URL` | *(optional)* | Enables private, cross-device case history. |
+| `SUPABASE_ANON_KEY` | *(optional)* | Public Supabase publishable/anon key for user-scoped history. |
+
+## Private case history
+
+Compliance scenarios can contain sensitive business details, so history is disabled
+until a Supabase project is connected. When enabled, users sign in with a one-time
+email code and can only read or change their own cases; this is enforced by database
+row-level security, not by the UI.
+
+1. Create a Supabase project and run [`supabase/schema.sql`](supabase/schema.sql) in
+   **SQL Editor**.
+2. In **Authentication → Email Templates**, configure the sign-in email to include
+   `{{ .Token }}` so the app can verify the six-digit code.
+3. Add the project URL and its publishable/anon key to local `.env` or your host's
+   secrets:
+
+   ```toml
+   SUPABASE_URL = "https://your-project.supabase.co"
+   SUPABASE_ANON_KEY = "your-publishable-or-anon-key"
+   ```
+
+4. Redeploy. The **Cases** workspace then saves completed analyses automatically.
+
+Never add a Supabase `service_role` or secret key to Streamlit secrets. The app uses
+the public key plus the signed-in user's short-lived session, and the SQL policies
+limit every query to that user.
 
 The Streamlit theme is pinned in `.streamlit/config.toml` so the app doesn't auto-switch into dark mode based on OS preference.
 

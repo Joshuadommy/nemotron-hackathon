@@ -1393,8 +1393,26 @@ def _request_history_code() -> None:
         HISTORY_STORE.request_email_code(email)
         ss.history_notice = "Check your inbox for the six-digit sign-in code."
         ss.history_code_requested = True
-    except Exception:
-        ss.history_notice = "We could not send a sign-in code. Check the Supabase configuration."
+    except Exception as exc:
+        # Show an actionable, safe diagnosis. The old generic notice made a
+        # rejected Supabase request indistinguishable from a successful click.
+        detail = str(exc).replace("\n", " ").strip()
+        detail_low = detail.lower()
+        if "email logins are disabled" in detail_low or "provider is disabled" in detail_low:
+            ss.history_notice = "Email sign-in is disabled in Supabase. Enable Authentication → Sign In / Providers → Email."
+        elif "magic link" in detail_low or "error sending" in detail_low or "smtp" in detail_low:
+            ss.history_notice = (
+                "Supabase accepted the request but could not deliver the email. Its default sender only delivers "
+                "to project-team addresses; configure custom SMTP for external addresses."
+            )
+        elif "api key" in detail_low or "unauthorized" in detail_low or "invalid key" in detail_low:
+            ss.history_notice = "Supabase rejected the project credentials. Recheck SUPABASE_URL and SUPABASE_ANON_KEY in Streamlit secrets."
+        elif "rate limit" in detail_low or "too many" in detail_low:
+            ss.history_notice = "Supabase is rate-limiting sign-in emails. Wait one minute, then try again."
+        else:
+            # Response bodies contain the useful Supabase error code/message,
+            # but truncate them defensively and never include credentials.
+            ss.history_notice = f"Supabase rejected the sign-in request: {detail[:220] or type(exc).__name__}"
 
 
 def _verify_history_code() -> None:
@@ -1469,9 +1487,15 @@ def render_history_workspace() -> None:
         return
 
     user = _history_user()
-    with st.expander("Cases" + (f" · {user.email}" if user else " · Sign in"), expanded=False):
+    with st.expander(
+        "Cases" + (f" · {user.email}" if user else " · Sign in"),
+        expanded=bool(ss.history_notice or ss.get("history_code_requested")),
+    ):
         if ss.history_notice:
-            st.caption(ss.history_notice)
+            if "rejected" in ss.history_notice.lower() or "could not" in ss.history_notice.lower() or "disabled" in ss.history_notice.lower():
+                st.warning(ss.history_notice)
+            else:
+                st.info(ss.history_notice)
         if user is None:
             st.text_input("Email", key="history_email", placeholder="you@company.com")
             st.button("Email me a sign-in code", on_click=_request_history_code, key="history_request_code")

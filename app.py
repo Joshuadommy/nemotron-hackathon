@@ -82,8 +82,10 @@ html, body, .stApp,
   color: var(--text) !important;
 }
 
-html, body, .stApp, .stMarkdown, p, div, span, label, textarea, input, button,
-[class*="st-emotion-cache"] {
+/* Let text inherit Cabin from the app shell. Do not target every span or
+   Streamlit's generated classes here: disclosure controls use an icon font
+   whose glyph names otherwise render as visible words. */
+html, body, .stApp, .stMarkdown, p, div, label, textarea, input, button {
   font-family: 'Cabin', sans-serif !important;
 }
 
